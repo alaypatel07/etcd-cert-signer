@@ -2,8 +2,13 @@ module github.com/alaypatel07/etcd-cert-signer
 
 require (
 	github.com/NYTimes/gziphandler v1.0.1 // indirect
+	github.com/cloudflare/cfssl v0.0.0-20190808011637-b1ec8c586c2a // indirect
+	github.com/coreos/kubecsr v0.0.0-20190712042026-796ccf8501c8
+	github.com/google/certificate-transparency-go v1.0.21 // indirect
+	github.com/openshift/library-go v0.0.0-20190904120025-7d4acc018c61
 	github.com/operator-framework/operator-sdk v0.10.1-0.20190906161029-1cb0481ca946
 	github.com/spf13/pflag v1.0.3
+	github.com/zmap/zlint v1.0.1 // indirect
 	k8s.io/api v0.0.0-20190612125737-db0771252981
 	k8s.io/apimachinery v0.0.0-20190612125636-6a5db36e93ad
 	k8s.io/client-go v11.0.0+incompatible
