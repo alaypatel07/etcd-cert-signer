@@ -121,7 +121,7 @@ func (r *EtcdCertSigner) Reconcile(request reconcile.Request) (reconcile.Result,
 	}
 
 	// TODO: change namespace to openshift-config-managed
-	etcdCA, err := r.getSecret(etcdCASecretName, etcdCASecretNamespace)
+	etcdCA, err := r.getSecret(etcdCASecretName, pod.Namespace)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			reqLogger.Error(err, "CA Secret does not exist", "Secret.Namespace", etcdCASecretNamespace, "Secret.Name", etcdCASecretName)
@@ -304,8 +304,10 @@ func (r *EtcdCertSigner) getConfigMap(name string, namespace string) (*corev1.Co
 
 func (r *EtcdCertSigner) populateSecret(secret *corev1.Secret, cert *bytes.Buffer, key *bytes.Buffer) error {
 	//TODO: Update annotations Not Before and Not After for Cert Rotation
-	secret.Data["tls.crt"] = cert.Bytes()
-	secret.Data["tls.key"] = key.Bytes()
+	d := make(map[string][]byte)
+	d["tls.crt"] = cert.Bytes()
+	d["tls.key"] = key.Bytes()
+	secret.Data = d
 	return r.client.Update(context.Background(), secret)
 }
 
