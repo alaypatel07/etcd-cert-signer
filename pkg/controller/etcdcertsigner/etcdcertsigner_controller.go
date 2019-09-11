@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"fmt"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"strings"
@@ -132,7 +131,7 @@ func (r *EtcdCertSigner) Reconcile(request reconcile.Request) (reconcile.Result,
 	}
 
 	peerSecret, err := r.getSecret(getPeerSecretName(pod), pod.Namespace)
-	fmt.Println(peerSecret)
+	//fmt.Println(peerSecret)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			reqLogger.Error(err, "Peer secret does not exists", "Secret.Namespace ", pod.Namespace, "Secret.Name", getPeerSecretName(pod))
@@ -222,6 +221,11 @@ func getCerts(etcdCASecret *corev1.Secret, targetSecret *corev1.Secret, org stri
 			Organization: []string{org},
 			CommonName:   identity,
 		}
+		cert.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}
+
+		// TODO: Extended Key Usage:
+		// All profiles expect a x509.ExtKeyUsageCodeSigning set on extended Key Usages
+		// need to investigage: https://github.com/etcd-io/etcd/issues/9398#issuecomment-435340312
 		// TODO: some extensions are missing form cfssl.
 		// e.g.
 		//	X509v3 Subject Key Identifier:
