@@ -38,16 +38,11 @@ const (
 	CertificateIssuer = "auth.openshift.io/certificate-issuer"
 	// CertificateHostnames contains the hostnames used by a signer.
 	CertificateHostnames = "auth.openshift.io/certificate-hostnames"
-	//Todo: think of better name
+	//TODO: think of better name
 	CertificateEtcdIdentity = "auth.openshift.io/certificate-etcd-identity"
 )
 
-/**
-* USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
-* business logic.  Delete these comments after modifying this file.*
- */
-
-// Add creates a new CertificateSigningRequest Controller and adds it to the Manager. The Manager will set fields on the Controller
+// Add creates a new EtcdCertSigner Controller and adds it to the Manager. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.
 func Add(mgr manager.Manager) error {
 	return add(mgr, newReconciler(mgr))
@@ -103,9 +98,9 @@ func (r *EtcdCertSigner) Reconcile(request reconcile.Request) (reconcile.Result,
 	reqLogger := log.WithValues("Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling CertificateSigningRequest")
 
-	// Fetch the Pod instance
-	instance := &corev1.Pod{}
-	err := r.client.Get(context.TODO(), request.NamespacedName, instance)
+	// Fetch the Pod pod
+	pod := &corev1.Pod{}
+	err := r.client.Get(context.TODO(), request.NamespacedName, pod)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// Request object not found, could have been deleted after reconcile request.
@@ -119,74 +114,78 @@ func (r *EtcdCertSigner) Reconcile(request reconcile.Request) (reconcile.Result,
 		return reconcile.Result{}, err
 	}
 
-	if ok := etcdPod(instance.GetLabels()); !ok {
+	if ok := etcdPod(pod.GetLabels()); !ok {
 		// Not an etcd pod, remove the key from the queue
-		reqLogger.Info("Skip reconcile: Not an etcd pod", "Pod.Namespace", instance.Namespace, "Pod.Name", instance.Name)
+		reqLogger.Info("Skip reconcile: Not an etcd pod", "Pod.Namespace", pod.Namespace, "Pod.Name", pod.Name)
 		return reconcile.Result{}, nil
 	}
 
-	// Todo: change namespace to openshift-config-managed
+	// TODO: change namespace to openshift-config-managed
 	etcdCA, err := r.getSecret(etcdCASecretName, etcdCASecretNamespace)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			reqLogger.Error(err, "CA Secret does not exist", "Secret.Namespace", etcdCASecretNamespace, "Secret.Name", etcdCASecretName)
-			return reconcile.Result{Requeue: true}, err
+			return reconcile.Result{}, err
 		} else {
 			reqLogger.Error(err, "Error getting CA Secret", "Secret.Namespace ", etcdCASecretNamespace, "Secret.Name", etcdCASecretName)
 		}
-
 	}
 
-	p, err := r.getSecret(instance.Name+"-peer", instance.Namespace)
-	fmt.Println(p)
+	peerSecret, err := r.getSecret(getPeerSecretName(pod), pod.Namespace)
+	fmt.Println(peerSecret)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			reqLogger.Error(err, "Peer secret does not exists", "Secret.Namespace ", instance.Namespace, "Secret.Name", instance.Name+"-peer")
+			reqLogger.Error(err, "Peer secret does not exists", "Secret.Namespace ", pod.Namespace, "Secret.Name", getPeerSecretName(pod))
 		} else {
-			reqLogger.Error(err, "Error getting peer secret", "Secret.Namespace ", instance.Namespace, "Secret.Name", instance.Name+"-peer")
+			reqLogger.Error(err, "Error getting peer secret", "Secret.Namespace ", pod.Namespace, "Secret.Name", getPeerSecretName(pod))
 		}
-		return reconcile.Result{Requeue: true}, err
+		return reconcile.Result{}, err
+	}
+	if _, ok := peerSecret.Data["tls.crt"]; !ok {
+		//this controller assumes that secret for CA is populated
+		// create the peer certs only if they dont exists
+		pCert, pKey, err := getCerts(etcdCA, peerSecret, "system:peers")
+		if err != nil {
+			reqLogger.Error(err, "Error signing the certificate")
+		}
+
+		err = r.populateSecret(peerSecret, pCert, pKey)
+		if err != nil {
+			reqLogger.Error(err, "Unable to update peer secret", "Secret.Namespace", peerSecret.Namespace, "Secret.Name", peerSecret.Name)
+		}
 	}
 
-	//this controller assumes that secret for CA is populated
-	pCert, pKey, err := getCerts(etcdCA, p, "system:peers")
-	if err != nil {
-		reqLogger.Error(err, "Error signing the certificate")
-	}
-
-	err = r.populateSecret(p, pCert, pKey)
-	if err != nil {
-		reqLogger.Error(err, "Unable to update peer secret", "Secret.Namespace", p.Namespace, "Secret.Name", p.Name)
-	}
-
-	s, err := r.getSecret(instance.Name+"-server", instance.Namespace)
+	serverSecret, err := r.getSecret(getServerSecretName(pod), pod.Namespace)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			reqLogger.Error(err, "Server secret does not exists", "Secret.Namespace ", instance.Namespace, "Secret.Name", instance.Name+"-server")
+			reqLogger.Error(err, "Server secret does not exists", "Secret.Namespace ", pod.Namespace, "Secret.Name", getServerSecretName(pod))
 		} else {
-			reqLogger.Error(err, "Error getting server secret", "Secret.Namespace ", instance.Namespace, "Secret.Name", instance.Name+"-server")
+			reqLogger.Error(err, "Error getting server secret", "Secret.Namespace ", pod.Namespace, "Secret.Name", getServerSecretName(pod))
 		}
-		return reconcile.Result{Requeue: true}, err
+		return reconcile.Result{}, err
 	}
-	//this controller assumes that secret for CA is populated
-	sCert, sKey, err := getCerts(etcdCA, p, "system:servers")
-	if err != nil {
-		reqLogger.Error(err, "Error signing the certificate")
+	if _, ok := serverSecret.Data["tls.crt"]; !ok {
+		//this controller assumes that secret for CA is populated
+		// create server the certs only if they dont exists
+		sCert, sKey, err := getCerts(etcdCA, peerSecret, "system:servers")
+		if err != nil {
+			reqLogger.Error(err, "Error signing the certificate")
+		}
+
+		err = r.populateSecret(serverSecret, sCert, sKey)
+		if err != nil {
+			reqLogger.Error(err, "Unable to update server secret", "Secret.Namespace", serverSecret.Namespace, "Secret.Name", serverSecret.Name)
+		}
 	}
 
-	err = r.populateSecret(s, sCert, sKey)
-	if err != nil {
-		reqLogger.Error(err, "Unable to update server secret", "Secret.Namespace", s.Namespace, "Secret.Name", s.Name)
-	}
-
-	//m, err := r.getSecret(instance.Name + "-metrics", instance.Namespace)
+	//m, err := r.getSecret(pod.Name + "-metrics", pod.Namespace)
 	//if err != nil {
 	//	if errors.IsNotFound(err) {
-	//		reqLogger.Error(err, "Metrics secret does not exists", "Metrics Secret Namespace ", instance.Namespace, "Secret.Name", instance.Name + "-metrics")
+	//		reqLogger.Error(err, "Metrics secret does not exists", "Metrics Secret Namespace ", pod.Namespace, "Secret.Name", pod.Name + "-metrics")
 	//	} else {
-	//		reqLogger.Error(err, "Error getting metrics secret", "Secret Namespace ", instance.Namespace, "Secret.Name", instance.Name + "-metrics")
+	//		reqLogger.Error(err, "Error getting metrics secret", "Secret Namespace ", pod.Namespace, "Secret.Name", pod.Name + "-metrics")
 	//	}
-	//	return reconcile.Result{Requeue: true}, err
+	//	return reconcile.Result{}, err
 	//}
 
 	//TODO populate metrics secret with signed certificate
@@ -223,6 +222,28 @@ func getCerts(etcdCASecret *corev1.Secret, targetSecret *corev1.Secret, org stri
 			Organization: []string{org},
 			CommonName:   identity,
 		}
+		// TODO: some extensions are missing form cfssl.
+		// e.g.
+		//	X509v3 Subject Key Identifier:
+		//		B7:30:0B:CF:47:4E:21:AE:13:60:74:42:B0:D9:C4:F3:26:69:63:03
+		//	X509v3 Authority Key Identifier:
+		//		keyid:9B:C0:6B:0C:8E:5C:73:6A:83:B1:E4:54:97:D3:62:18:8A:9C:BC:1E
+		// TODO: Change serial number logic, to something as follows.
+		// The following is taken from CFSSL library.
+		// If CFSSL is providing the serial numbers, it makes
+		// sense to use the max supported size.
+
+		//	serialNumber := make([]byte, 20)
+		//	_, err = io.ReadFull(rand.Reader, serialNumber)
+		//	if err != nil {
+		//		return err
+		//	}
+		//
+		//	// SetBytes interprets buf as the bytes of a big-endian
+		//	// unsigned integer. The leading byte should be masked
+		//	// off to ensure it isn't negative.
+		//	serialNumber[0] &= 0x7F
+		//	cert.SerialNumber = new(big.Int).SetBytes(serialNumber)
 		return nil
 	})
 	if err != nil {
@@ -241,7 +262,7 @@ func ensureCASecret(secret *corev1.Secret) error {
 	if _, ok := secret.Data["tls.crt"]; !ok {
 		return errors.NewBadRequest("CA Cert not found")
 	}
-	if _, ok := secret.Data["tls.pem"]; !ok {
+	if _, ok := secret.Data["tls.key"]; !ok {
 		return errors.NewBadRequest("CA Pem not found")
 	}
 	return nil
@@ -265,14 +286,6 @@ func getHostNamesFromSecret(secret *corev1.Secret) ([]string, error) {
 	return strings.Split(hostnames, ","), nil
 }
 
-func getEtcdIdentityFromSecret(secret *corev1.Secret) (string, error) {
-	identity, ok := secret.GetAnnotations()[CertificateEtcdIdentity]
-	if !ok {
-		return "", errors.NewBadRequest("Etcd Identity not found")
-	}
-	return identity, nil
-}
-
 func (r EtcdCertSigner) getSecret(name string, namespace string) (*corev1.Secret, error) {
 	secret := &corev1.Secret{}
 	if err := r.client.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: name}, secret); err != nil {
@@ -290,7 +303,7 @@ func (r *EtcdCertSigner) getConfigMap(name string, namespace string) (*corev1.Co
 }
 
 func (r *EtcdCertSigner) populateSecret(secret *corev1.Secret, cert *bytes.Buffer, key *bytes.Buffer) error {
-	//Todo: Update annotations Not Before and Not After for Cert Rotation
+	//TODO: Update annotations Not Before and Not After for Cert Rotation
 	secret.Data["tls.crt"] = cert.Bytes()
 	secret.Data["tls.key"] = key.Bytes()
 	return r.client.Update(context.Background(), secret)
@@ -301,4 +314,16 @@ func etcdPod(labels map[string]string) bool {
 		return true
 	}
 	return false
+}
+
+func getPeerSecretName(p *corev1.Pod) string {
+	return p.Name + "-peer"
+}
+
+func getServerSecretName(p *corev1.Pod) string {
+	return p.Name + "-server"
+}
+
+func getMetricsSecretName(p *corev1.Pod) string {
+	return p.Name + "-metrics"
 }
