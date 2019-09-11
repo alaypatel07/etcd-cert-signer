@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-cert-signer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: etcd-cert-signer
+  template:
+    metadata:
+      labels:
+        name: etcd-cert-signer
+    spec:
+      serviceAccountName: etcd-cert-signer
+      containers:
+        - name: etcd-cert-signer
+          # Replace this with the built image name
+          image: quay.io/alaypatel07/etcd-cert-signer:v0.0.1
+          command:
+          - etcd-cert-signer
+          imagePullPolicy: Always
+          env:
+            - name: WATCH_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OPERATOR_NAME
+              value: "etcd-cert-signer"
